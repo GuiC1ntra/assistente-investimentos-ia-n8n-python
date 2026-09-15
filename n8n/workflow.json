@@ -1,0 +1,214 @@
+{
+  "name": "Assistente de Investimentos com IA",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "investimentos",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "1f6a2b10-0001-4a11-9c1a-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-140, 300],
+      "webhookId": "investimentos-briefing"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://economia.awesomeapi.com.br/json/last/USD-BRL,BTC-BRL",
+        "options": {}
+      },
+      "id": "1f6a2b10-0001-4a11-9c1a-000000000002",
+      "name": "HTTP Request - Dados de Mercado",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [100, 160]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normaliza e valida o payload recebido do script Python (Colab)\nconst body = $input.first().json.body ?? $input.first().json;\n\nif (!body || !Array.isArray(body.ativos) || body.ativos.length === 0) {\n  throw new Error('Payload inválido: campo \"ativos\" ausente ou vazio.');\n}\n\nif (!body.destinatario_email) {\n  throw new Error('Payload inválido: \"destinatario_email\" não informado.');\n}\n\nreturn [{\n  json: {\n    origem: body.origem ?? 'desconhecida',\n    gerado_em: body.gerado_em ?? new Date().toISOString(),\n    destinatario_email: body.destinatario_email,\n    ativos: body.ativos,\n  }\n}];\n"
+      },
+      "id": "1f6a2b10-0001-4a11-9c1a-000000000003",
+      "name": "Code - Normaliza Payload Colab",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [100, 400]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      },
+      "id": "1f6a2b10-0001-4a11-9c1a-000000000004",
+      "name": "Merge",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [340, 280]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Consolida os dois ramos (dados de mercado + payload do Colab) em um único objeto\nconst mercado = $items('HTTP Request - Dados de Mercado')[0].json;\nconst colab = $items('Code - Normaliza Payload Colab')[0].json;\n\nreturn [{\n  json: {\n    ...colab,\n    dados_mercado_complementares: mercado,\n  }\n}];\n"
+      },
+      "id": "1f6a2b10-0001-4a11-9c1a-000000000005",
+      "name": "Code - Consolida Dados",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [560, 280]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  \"model\": \"gpt-4o-mini\",\n  \"messages\": [\n    { \"role\": \"system\", \"content\": \"Você é um assistente financeiro que escreve briefings diários de investimentos, claros e objetivos, em português.\" },\n    { \"role\": \"user\", \"content\": \"Gere um briefing diário com base nestes dados: \" + JSON.stringify($json) }\n  ]\n} }}",
+        "options": {}
+      },
+      "id": "1f6a2b10-0001-4a11-9c1a-000000000006",
+      "name": "HTTP Request - LLM (Gera Briefing)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [780, 280]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extrai o texto gerado pelo LLM e monta o corpo do e-mail em HTML\nconst respostaLlm = $input.first().json;\nconst textoBriefing = respostaLlm.choices?.[0]?.message?.content ?? 'Não foi possível gerar o briefing hoje.';\n\nconst html = `\n  <h2>Briefing Diário de Investimentos</h2>\n  <p>${textoBriefing.replace(/\\n/g, '<br>')}</p>\n  <hr>\n  <small>Gerado automaticamente via n8n + IA.</small>\n`;\n\nreturn [{\n  json: {\n    destinatario_email: $('Code - Consolida Dados').first().json.destinatario_email,\n    assunto: `Briefing de Investimentos - ${new Date().toLocaleDateString('pt-BR')}`,\n    corpo_html: html,\n  }\n}];\n"
+      },
+      "id": "1f6a2b10-0001-4a11-9c1a-000000000007",
+      "name": "Code - Monta E-mail HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1000, 280]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $json.destinatario_email }}",
+        "subject": "={{ $json.assunto }}",
+        "emailType": "html",
+        "message": "={{ $json.corpo_html }}",
+        "options": {}
+      },
+      "id": "1f6a2b10-0001-4a11-9c1a-000000000008",
+      "name": "Gmail - Enviar Briefing",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [1220, 280]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-1",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "1f6a2b10-0001-4a11-9c1a-000000000009",
+      "name": "IF - Envio OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1440, 280]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://hooks.slack.com/services/SEU/WEBHOOK/AQUI",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"text\": \"⚠️ Falha ao enviar o briefing de investimentos por e-mail.\" } }}",
+        "options": {}
+      },
+      "id": "1f6a2b10-0001-4a11-9c1a-00000000000a",
+      "name": "HTTP Request - Notifica Falha",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1660, 400]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          { "node": "HTTP Request - Dados de Mercado", "type": "main", "index": 0 },
+          { "node": "Code - Normaliza Payload Colab", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "HTTP Request - Dados de Mercado": {
+      "main": [
+        [ { "node": "Merge", "type": "main", "index": 0 } ]
+      ]
+    },
+    "Code - Normaliza Payload Colab": {
+      "main": [
+        [ { "node": "Merge", "type": "main", "index": 1 } ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [ { "node": "Code - Consolida Dados", "type": "main", "index": 0 } ]
+      ]
+    },
+    "Code - Consolida Dados": {
+      "main": [
+        [ { "node": "HTTP Request - LLM (Gera Briefing)", "type": "main", "index": 0 } ]
+      ]
+    },
+    "HTTP Request - LLM (Gera Briefing)": {
+      "main": [
+        [ { "node": "Code - Monta E-mail HTML", "type": "main", "index": 0 } ]
+      ]
+    },
+    "Code - Monta E-mail HTML": {
+      "main": [
+        [ { "node": "Gmail - Enviar Briefing", "type": "main", "index": 0 } ]
+      ]
+    },
+    "Gmail - Enviar Briefing": {
+      "main": [
+        [ { "node": "IF - Envio OK?", "type": "main", "index": 0 } ]
+      ]
+    },
+    "IF - Envio OK?": {
+      "main": [
+        [],
+        [ { "node": "HTTP Request - Notifica Falha", "type": "main", "index": 0 } ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "assistente-investimentos-ia-n8n"
+  }
+}
